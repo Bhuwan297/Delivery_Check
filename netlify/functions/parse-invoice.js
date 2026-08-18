@@ -133,20 +133,20 @@ exports.handler = async (event) => {
             ...imageBlocks,
             {
               type: "text",
-              text: `These are one or more photos of the same delivery invoice/packing slip for a convenience store (may span multiple photos of one long list).
+              text: `This is one photo of part of a delivery invoice/packing slip for a convenience store. It may be the whole page, or it may be a cropped top or bottom portion of a taller page (cropped so the request stays fast) — in that case the very top or very bottom edge of the frame may cut a row off mid-way through.
 
-First, check if any of these photos is the FIRST page of the invoice — it usually has a header/summary table above the line items (things like Run ID, Drop, Sequence, Store Number, Store Name, Address, Delivery Date, Cage Count, Milk Crates Count, Black Crates Count, Krispy Kreme/Daniels Donuts Box Count, Banana Box Count, Seal Number — exact fields vary by supplier). If present, extract every field from that header as a label/value pair in "deliveryInfo", in the order they appear. If none of these photos show that header section, return an empty array for "deliveryInfo" — don't guess or invent fields.
+First, check if this photo shows the FIRST page of the invoice — it usually has a header/summary table above the line items (things like Run ID, Drop, Sequence, Store Number, Store Name, Address, Delivery Date, Cage Count, Milk Crates Count, Black Crates Count, Krispy Kreme/Daniels Donuts Box Count, Banana Box Count, Seal Number — exact fields vary by supplier). If present, extract every field from that header as a label/value pair in "deliveryInfo", in the order they appear. If this photo doesn't show that header section, return an empty array for "deliveryInfo" — don't guess or invent fields.
 
 Then extract every product line item into a flat list: product name, expected quantity, unit if shown, and a category from the allowed set.
 
-These invoices are dense tables — some pages have 20+ rows packed tightly together, sometimes with small or faint print, and category labels are sometimes only shown once for a whole group of rows rather than repeated on every row. Before answering, work through the table systematically from top to bottom, row by row, and count how many rows you found — it's easy to accidentally stop partway through a long table or skip a row that shares a category label with the one above it. Every single row in the table is a separate line item that must appear in your output, even ones near the bottom of the page or in a densely packed section.
+This may be a dense table — some pages have 20+ rows packed tightly together, sometimes with small or faint print, and category labels are sometimes only shown once for a whole group of rows rather than repeated on every row. Before answering, work through the table systematically from top to bottom, row by row, and count how many rows you found — it's easy to accidentally stop partway through a long table or skip a row that shares a category label with the one above it. Every single fully-visible row in the table is a separate line item that must appear in your output, even ones near the bottom of the frame or in a densely packed section.
 
 Rules:
-- Merge lines that are clearly the same product split across photos — don't duplicate.
+- If a row is cut off at the very top or very bottom edge of the frame — only partially visible, not the whole row — skip it entirely. Don't guess at it; a different photo of this same page will capture it in full.
 - If a quantity isn't legible, use your best reading rather than guessing 1.
 - Keep product names short and recognizable (as you'd see them on a shelf), not the full distributor SKU description.
 - Pick the closest category even if it's a rough fit; use "Other" only when nothing fits.
-- Do not omit a row because you're unsure about part of it — include it with your best-effort reading rather than dropping it.`,
+- Do not omit a fully-visible row because you're unsure about part of it — include it with your best-effort reading rather than dropping it.`,
             },
           ],
         },
