@@ -69,18 +69,31 @@
   .big-btn.secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
   .big-btn:disabled { opacity: 0.4; }
 
-  .thumb-strip { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
-  .thumb {
-    position: relative; width: 64px; height: 64px; border-radius: 10px; overflow: hidden;
+  .page-list { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+  .page-row {
+    display: flex; align-items: center; gap: 12px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px;
+  }
+  .page-thumb {
+    width: 52px; height: 52px; border-radius: 8px; overflow: hidden; flex-shrink: 0;
     border: 1px solid var(--border); background: var(--surface-2);
   }
-  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .thumb .rm {
-    position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%;
-    background: rgba(0,0,0,0.6); color: #fff; font-size: 0.7rem; display: flex; align-items: center; justify-content: center;
-    border: none;
+  .page-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .page-info { flex: 1; min-width: 0; }
+  .page-title { font-size: 0.9rem; font-weight: 600; }
+  .page-status { font-size: 0.8rem; margin-top: 2px; display: flex; align-items: center; gap: 6px; }
+  .page-status.scanning { color: var(--accent); }
+  .page-status.done { color: var(--ok); }
+  .page-status.error { color: var(--danger); }
+  .mini-spinner {
+    width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0;
   }
-  .photo-count { font-family: ui-monospace, Menlo, monospace; color: var(--accent); font-weight: 600; }
+  .page-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .page-actions button {
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text-dim);
+    border-radius: 8px; width: 32px; height: 32px; font-size: 0.85rem; cursor: pointer;
+  }
 
   /* --- Checklist screen --- */
   .info-card {
@@ -207,8 +220,6 @@
   const STORAGE_KEY = "deliverycheck_current_v1";
   const MAX_DIM = 2000; // higher res so dense small-print tables stay legible
   const JPEG_QUALITY = 0.92;
-  const BATCH_SIZE = 1; // photos per request — one page per call keeps each request light and gives the model full attention per page
-  const CONCURRENCY = 2; // max requests in flight at once — bounded so we don't trip Anthropic's per-minute rate limit
 
   const CATEGORY_COLORS = {
     "Drinks": "var(--drinks)",
@@ -235,32 +246,39 @@
     render();
   });
 
-  async function handleFileSelection(files) {
-    let failCount = 0;
+  // Photos are scanned one at a time, right after they're added — not queued up
+  // into one big batch — so each page's result (and any failure) shows up
+  // immediately instead of only being discoverable after everything finishes.
+  async function addAndScanPhotos(files) {
+    const newPhotos = [];
     for (const file of files) {
       try {
         const dataUrl = await processImageFile(file);
-        state.photos.push({ id: crypto.randomUUID(), dataUrl });
+        const photo = { id: crypto.randomUUID(), dataUrl, status: "pending", items: [], deliveryInfo: [], error: null };
+        state.photos.push(photo);
+        newPhotos.push(photo);
       } catch (err) {
         console.error(err);
-        failCount++;
+        showToast("Couldn't read one of the photos — try again");
       }
     }
     persist();
     render();
-    if (failCount) showToast(`Couldn't read ${failCount} photo${failCount === 1 ? "" : "s"} — try again`);
+    for (const photo of newPhotos) {
+      await scanSinglePhoto(photo.id);
+    }
   }
 
   cameraInput.addEventListener("change", (e) => {
     const files = Array.from(e.target.files || []);
     cameraInput.value = "";
-    handleFileSelection(files);
+    addAndScanPhotos(files);
   });
 
   uploadInput.addEventListener("change", (e) => {
     const files = Array.from(e.target.files || []);
     uploadInput.value = "";
-    handleFileSelection(files);
+    addAndScanPhotos(files);
   });
 
   async function processImageFile(file) {
@@ -307,79 +325,53 @@
     }
   }
 
-  // Runs each task with at most `limit` in flight at once, rather than firing all
-  // of them simultaneously — keeps us under Anthropic's per-minute rate limits.
-  async function runWithConcurrency(taskFns, limit) {
-    const results = new Array(taskFns.length);
-    let next = 0;
-    async function worker() {
-      while (next < taskFns.length) {
-        const i = next++;
-        try {
-          results[i] = { status: "fulfilled", value: await taskFns[i]() };
-        } catch (err) {
-          results[i] = { status: "rejected", reason: err };
-        }
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(limit, taskFns.length) }, worker));
-    return results;
-  }
-
-  async function scanPhotos() {
-    state.screen = "loading";
+  async function scanSinglePhoto(photoId) {
+    const photo = state.photos.find((p) => p.id === photoId);
+    if (!photo) return;
+    photo.status = "scanning";
+    photo.error = null;
+    persist();
     render();
     try {
-      const allImages = state.photos.map((p) => p.dataUrl.split(",")[1]);
-      const batches = [];
-      for (let i = 0; i < allImages.length; i += BATCH_SIZE) {
-        batches.push(allImages.slice(i, i + BATCH_SIZE));
-      }
-
-      const results = await runWithConcurrency(
-        batches.map((images) => () => fetchBatch(images)),
-        CONCURRENCY
-      );
-
-      const items = [];
-      let deliveryInfo = [];
-      let failedBatches = 0;
-      results.forEach((r) => {
-        if (r.status === "fulfilled") {
-          items.push(...r.value.items);
-          if (!deliveryInfo.length && r.value.deliveryInfo.length) deliveryInfo = r.value.deliveryInfo;
-        } else {
-          failedBatches++;
-          console.error(r.reason);
-        }
-      });
-
-      if (items.length === 0) {
-        throw new Error("Couldn't read any of the photos — try again with fewer at once");
-      }
-
-      state.items = items.map((it) => ({
-        id: crypto.randomUUID(),
-        name: it.name,
-        quantity: it.quantity,
-        unit: it.unit || "",
-        category: CATEGORY_COLORS[it.category] ? it.category : "Other",
-        checked: false,
-      }));
-      state.deliveryInfo = deliveryInfo;
-      state.screen = "checklist";
-      persist();
-      render();
-      if (failedBatches) {
-        showToast(`Got ${items.length} items — ${failedBatches} photo${failedBatches === 1 ? "" : "s"} timed out, may need a rescan`);
-      }
+      const base64 = photo.dataUrl.split(",")[1];
+      const result = await fetchBatch([base64]);
+      photo.items = result.items;
+      photo.deliveryInfo = result.deliveryInfo;
+      photo.status = "done";
     } catch (err) {
       console.error(err);
-      state.screen = "scan";
-      persist();
-      render();
-      showToast(err.message || "Couldn't read the invoice — try again");
+      photo.status = "error";
+      photo.error = err.message || "Scan failed";
     }
+    persist();
+    render();
+  }
+
+  function proceedToChecklist() {
+    const items = [];
+    let deliveryInfo = [];
+    state.photos.forEach((p) => {
+      if (p.status === "done") {
+        items.push(...p.items);
+        if (!deliveryInfo.length && p.deliveryInfo && p.deliveryInfo.length) deliveryInfo = p.deliveryInfo;
+      }
+    });
+    if (items.length === 0) {
+      showToast("No pages finished scanning yet");
+      return;
+    }
+    state.items = items.map((it) => ({
+      id: crypto.randomUUID(),
+      name: it.name,
+      quantity: it.quantity,
+      unit: it.unit || "",
+      category: CATEGORY_COLORS[it.category] ? it.category : "Other",
+      checked: false,
+    }));
+    state.deliveryInfo = deliveryInfo;
+    state.screen = "checklist";
+    persist();
+    render();
   }
 
   function toggleItem(id) {
@@ -454,49 +446,63 @@
   }
 
   function render() {
-    if (state.screen === "loading") return renderLoading();
     if (state.screen === "checklist") return renderChecklist();
     return renderScan();
   }
 
   function renderScan() {
+    const anyInProgress = state.photos.some((p) => p.status === "scanning" || p.status === "pending");
+    const doneCount = state.photos.filter((p) => p.status === "done").length;
+    const doneItemCount = state.photos.reduce((sum, p) => sum + (p.status === "done" ? p.items.length : 0), 0);
+
     main.innerHTML = `
       <div class="scan-card">
-        <p>Snap each page of the delivery invoice — or upload photos you've already got. Tap <strong>Done</strong> when you've got them all.</p>
+        <p>Add one page at a time — each photo gets read as soon as you add it, so you can check it before moving to the next.</p>
         <div class="fab-row">
-          <button class="big-btn" id="takePhotoBtn">📷 Take photo</button>
-          <button class="big-btn secondary" id="uploadBtn">🖼️ Upload photos</button>
+          <button class="big-btn" id="takePhotoBtn" ${anyInProgress ? "disabled" : ""}>📷 Take photo</button>
+          <button class="big-btn secondary" id="uploadBtn" ${anyInProgress ? "disabled" : ""}>🖼️ Upload photos</button>
         </div>
-        ${state.photos.length ? `
-          <div class="thumb-strip" id="thumbStrip"></div>
-          <p style="margin: 14px 0 0;"><span class="photo-count">${state.photos.length}</span> photo${state.photos.length === 1 ? "" : "s"} added</p>
-          <div style="margin-top:14px;">
-            <button class="big-btn secondary" id="doneBtn">✓ Done — show me the list</button>
-          </div>
-        ` : ""}
       </div>
+      ${state.photos.length ? `<div class="page-list" id="pageList"></div>` : ""}
+      ${doneCount ? `
+        <button class="big-btn secondary" id="viewChecklistBtn">✓ View checklist (${doneItemCount} item${doneItemCount === 1 ? "" : "s"} so far)</button>
+      ` : ""}
     `;
     document.getElementById("takePhotoBtn").addEventListener("click", () => cameraInput.click());
     document.getElementById("uploadBtn").addEventListener("click", () => uploadInput.click());
-    if (state.photos.length) {
-      const strip = document.getElementById("thumbStrip");
-      state.photos.forEach((p) => {
-        const div = document.createElement("div");
-        div.className = "thumb";
-        div.innerHTML = `<img src="${p.dataUrl}" /><button class="rm">✕</button>`;
-        div.querySelector(".rm").addEventListener("click", () => removePhoto(p.id));
-        strip.appendChild(div);
-      });
-      document.getElementById("doneBtn").addEventListener("click", scanPhotos);
-    }
-  }
 
-  function renderLoading() {
-    main.innerHTML = `
-      <div class="loading">
-        <div class="spinner"></div>
-        <p>Reading the invoice… stitching ${state.photos.length} photo${state.photos.length === 1 ? "" : "s"} into a checklist</p>
-      </div>`;
+    const list = document.getElementById("pageList");
+    if (list) {
+      state.photos.forEach((p, idx) => {
+        const row = document.createElement("div");
+        row.className = "page-row";
+        let statusHtml = "";
+        if (p.status === "scanning" || p.status === "pending") {
+          statusHtml = `<div class="page-status scanning"><span class="mini-spinner"></span> Reading…</div>`;
+        } else if (p.status === "done") {
+          statusHtml = `<div class="page-status done">✓ ${p.items.length} item${p.items.length === 1 ? "" : "s"} found</div>`;
+        } else if (p.status === "error") {
+          statusHtml = `<div class="page-status error">⚠ ${escapeHtml(p.error || "Failed")}</div>`;
+        }
+        row.innerHTML = `
+          <div class="page-thumb"><img src="${p.dataUrl}" /></div>
+          <div class="page-info">
+            <div class="page-title">Page ${idx + 1}</div>
+            ${statusHtml}
+          </div>
+          <div class="page-actions">
+            <button class="rescanBtn" title="Rescan this page">↻</button>
+            <button class="rmBtn" title="Remove">✕</button>
+          </div>
+        `;
+        row.querySelector(".rescanBtn").addEventListener("click", () => scanSinglePhoto(p.id));
+        row.querySelector(".rmBtn").addEventListener("click", () => removePhoto(p.id));
+        list.appendChild(row);
+      });
+    }
+
+    const viewBtn = document.getElementById("viewChecklistBtn");
+    if (viewBtn) viewBtn.addEventListener("click", proceedToChecklist);
   }
 
   function renderChecklist() {
