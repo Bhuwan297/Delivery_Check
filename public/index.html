@@ -173,6 +173,7 @@
 </div>
 
 <input type="file" id="cameraInput" accept="image/*" capture="environment" />
+<input type="file" id="uploadInput" accept="image/*" multiple />
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
@@ -197,6 +198,7 @@
 
   const main = document.getElementById("main");
   const cameraInput = document.getElementById("cameraInput");
+  const uploadInput = document.getElementById("uploadInput");
   const toastEl = document.getElementById("toast");
 
   document.getElementById("newDeliveryBtn").addEventListener("click", () => {
@@ -206,20 +208,32 @@
     render();
   });
 
-  cameraInput.addEventListener("change", async (e) => {
-    const files = Array.from(e.target.files || []);
-    cameraInput.value = "";
+  async function handleFileSelection(files) {
+    let failCount = 0;
     for (const file of files) {
       try {
         const dataUrl = await processImageFile(file);
         state.photos.push({ id: crypto.randomUUID(), dataUrl });
       } catch (err) {
         console.error(err);
-        showToast("Couldn't read that photo — try again");
+        failCount++;
       }
     }
     persist();
     render();
+    if (failCount) showToast(`Couldn't read ${failCount} photo${failCount === 1 ? "" : "s"} — try again`);
+  }
+
+  cameraInput.addEventListener("change", (e) => {
+    const files = Array.from(e.target.files || []);
+    cameraInput.value = "";
+    handleFileSelection(files);
+  });
+
+  uploadInput.addEventListener("change", (e) => {
+    const files = Array.from(e.target.files || []);
+    uploadInput.value = "";
+    handleFileSelection(files);
   });
 
   async function processImageFile(file) {
@@ -352,8 +366,11 @@
   function renderScan() {
     main.innerHTML = `
       <div class="scan-card">
-        <p>Snap each page of the delivery invoice — one photo per shot, as many as you need. Tap <strong>Done</strong> when you've got them all.</p>
-        <button class="big-btn" id="takePhotoBtn">📷 Take photo</button>
+        <p>Snap each page of the delivery invoice — or upload photos you've already got. Tap <strong>Done</strong> when you've got them all.</p>
+        <div class="fab-row">
+          <button class="big-btn" id="takePhotoBtn">📷 Take photo</button>
+          <button class="big-btn secondary" id="uploadBtn">🖼️ Upload photos</button>
+        </div>
         ${state.photos.length ? `
           <div class="thumb-strip" id="thumbStrip"></div>
           <p style="margin: 14px 0 0;"><span class="photo-count">${state.photos.length}</span> photo${state.photos.length === 1 ? "" : "s"} added</p>
@@ -364,6 +381,7 @@
       </div>
     `;
     document.getElementById("takePhotoBtn").addEventListener("click", () => cameraInput.click());
+    document.getElementById("uploadBtn").addEventListener("click", () => uploadInput.click());
     if (state.photos.length) {
       const strip = document.getElementById("thumbStrip");
       state.photos.forEach((p) => {
