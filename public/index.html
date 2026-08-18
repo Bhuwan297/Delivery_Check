@@ -208,7 +208,7 @@
   const MAX_DIM = 1400;
   const JPEG_QUALITY = 0.85;
   const BATCH_SIZE = 1; // photos per request — one page per call keeps each request light and gives the model full attention per page
-  const CONCURRENCY = 3; // max requests in flight at once — bounded so we don't trip Anthropic's per-minute rate limit
+  const CONCURRENCY = 2; // max requests in flight at once — bounded so we don't trip Anthropic's per-minute rate limit
 
   const CATEGORY_COLORS = {
     "Drinks": "var(--drinks)",
@@ -285,6 +285,9 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  const MAX_ATTEMPTS = 3; // 1 initial try + 2 retries
+  const RETRY_DELAYS_MS = [2000, 5000]; // backoff before retry 1 and retry 2 — long enough to clear a per-minute rate limit
+
   async function fetchBatch(images, attempt = 1) {
     try {
       const res = await fetch("/.netlify/functions/parse-invoice", {
@@ -296,8 +299,8 @@
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       return { items: data.items || [], deliveryInfo: data.deliveryInfo || [] };
     } catch (err) {
-      if (attempt < 2) {
-        await sleep(800);
+      if (attempt < MAX_ATTEMPTS) {
+        await sleep(RETRY_DELAYS_MS[attempt - 1]);
         return fetchBatch(images, attempt + 1);
       }
       throw err;
