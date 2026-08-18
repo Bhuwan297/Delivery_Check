@@ -71,7 +71,7 @@ exports.handler = async (event) => {
 
   try {
     const response = await client.messages.create({
-      model: "claude-opus-5",
+      model: "claude-sonnet-5",
       max_tokens: 8000,
       thinking: { type: "adaptive" },
       output_config: {
