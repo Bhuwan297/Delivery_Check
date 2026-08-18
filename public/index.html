@@ -205,8 +205,8 @@
 <script>
 (() => {
   const STORAGE_KEY = "deliverycheck_current_v1";
-  const MAX_DIM = 1400;
-  const JPEG_QUALITY = 0.85;
+  const MAX_DIM = 2000; // higher res so dense small-print tables stay legible
+  const JPEG_QUALITY = 0.92;
   const BATCH_SIZE = 1; // photos per request — one page per call keeps each request light and gives the model full attention per page
   const CONCURRENCY = 2; // max requests in flight at once — bounded so we don't trip Anthropic's per-minute rate limit
 
