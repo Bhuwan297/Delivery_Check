@@ -207,7 +207,8 @@
   const STORAGE_KEY = "deliverycheck_current_v1";
   const MAX_DIM = 1400;
   const JPEG_QUALITY = 0.85;
-  const BATCH_SIZE = 2; // photos per request — keeps each function call well under Netlify's ~26s hard timeout
+  const BATCH_SIZE = 1; // photos per request — one page per call keeps each request light and gives the model full attention per page
+  const CONCURRENCY = 3; // max requests in flight at once — bounded so we don't trip Anthropic's per-minute rate limit
 
   const CATEGORY_COLORS = {
     "Drinks": "var(--drinks)",
@@ -280,6 +281,48 @@
     return canvas.toDataURL("image/jpeg", JPEG_QUALITY);
   }
 
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function fetchBatch(images, attempt = 1) {
+    try {
+      const res = await fetch("/.netlify/functions/parse-invoice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ images }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      return { items: data.items || [], deliveryInfo: data.deliveryInfo || [] };
+    } catch (err) {
+      if (attempt < 2) {
+        await sleep(800);
+        return fetchBatch(images, attempt + 1);
+      }
+      throw err;
+    }
+  }
+
+  // Runs each task with at most `limit` in flight at once, rather than firing all
+  // of them simultaneously — keeps us under Anthropic's per-minute rate limits.
+  async function runWithConcurrency(taskFns, limit) {
+    const results = new Array(taskFns.length);
+    let next = 0;
+    async function worker() {
+      while (next < taskFns.length) {
+        const i = next++;
+        try {
+          results[i] = { status: "fulfilled", value: await taskFns[i]() };
+        } catch (err) {
+          results[i] = { status: "rejected", reason: err };
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(limit, taskFns.length) }, worker));
+    return results;
+  }
+
   async function scanPhotos() {
     state.screen = "loading";
     render();
@@ -290,18 +333,9 @@
         batches.push(allImages.slice(i, i + BATCH_SIZE));
       }
 
-      const results = await Promise.allSettled(
-        batches.map((images) =>
-          fetch("/.netlify/functions/parse-invoice", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ images }),
-          }).then(async (res) => {
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-            return { items: data.items || [], deliveryInfo: data.deliveryInfo || [] };
-          })
-        )
+      const results = await runWithConcurrency(
+        batches.map((images) => () => fetchBatch(images)),
+        CONCURRENCY
       );
 
       const items = [];
