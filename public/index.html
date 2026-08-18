@@ -83,6 +83,31 @@
   .photo-count { font-family: ui-monospace, Menlo, monospace; color: var(--accent); font-weight: 600; }
 
   /* --- Checklist screen --- */
+  .info-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 14px 16px; margin-bottom: 12px;
+  }
+  .info-card summary {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim);
+    cursor: pointer; list-style: none;
+  }
+  .info-card summary::-webkit-details-marker { display: none; }
+  .info-card summary .chev { transition: transform 0.15s ease; color: var(--text-dim); }
+  .info-card[open] summary .chev { transform: rotate(180deg); }
+  .info-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px;
+  }
+  .info-tile {
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px;
+  }
+  .info-tile .info-label {
+    font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); margin-bottom: 2px;
+  }
+  .info-tile .info-value {
+    font-size: 0.95rem; font-weight: 700; font-family: ui-monospace, Menlo, monospace; word-break: break-word;
+  }
+
   .progress-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; }
   .progress-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
   .progress-top .count { font-family: ui-monospace, Menlo, monospace; font-size: 1.4rem; font-weight: 700; }
@@ -195,7 +220,7 @@
     "Other": "var(--other)",
   };
 
-  let state = loadState() || { screen: "scan", photos: [], items: [] };
+  let state = loadState() || { screen: "scan", photos: [], items: [], deliveryInfo: [] };
 
   const main = document.getElementById("main");
   const cameraInput = document.getElementById("cameraInput");
@@ -204,7 +229,7 @@
 
   document.getElementById("newDeliveryBtn").addEventListener("click", () => {
     if (state.items.length && !confirm("Start a new delivery? This clears the current checklist.")) return;
-    state = { screen: "scan", photos: [], items: [] };
+    state = { screen: "scan", photos: [], items: [], deliveryInfo: [] };
     persist();
     render();
   });
@@ -274,16 +299,22 @@
           }).then(async (res) => {
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-            return data.items || [];
+            return { items: data.items || [], deliveryInfo: data.deliveryInfo || [] };
           })
         )
       );
 
       const items = [];
+      let deliveryInfo = [];
       let failedBatches = 0;
       results.forEach((r) => {
-        if (r.status === "fulfilled") items.push(...r.value);
-        else { failedBatches++; console.error(r.reason); }
+        if (r.status === "fulfilled") {
+          items.push(...r.value.items);
+          if (!deliveryInfo.length && r.value.deliveryInfo.length) deliveryInfo = r.value.deliveryInfo;
+        } else {
+          failedBatches++;
+          console.error(r.reason);
+        }
       });
 
       if (items.length === 0) {
@@ -298,6 +329,7 @@
         category: CATEGORY_COLORS[it.category] ? it.category : "Other",
         checked: false,
       }));
+      state.deliveryInfo = deliveryInfo;
       state.screen = "checklist";
       persist();
       render();
@@ -454,7 +486,25 @@
       (byCategory[it.category] = byCategory[it.category] || []).push(it);
     });
 
-    let html = `
+    let html = "";
+
+    if (state.deliveryInfo && state.deliveryInfo.length) {
+      html += `
+        <details class="info-card" open>
+          <summary>Delivery info <span class="chev">▾</span></summary>
+          <div class="info-grid">
+            ${state.deliveryInfo.map((f) => `
+              <div class="info-tile">
+                <div class="info-label">${escapeHtml(f.label)}</div>
+                <div class="info-value">${escapeHtml(f.value)}</div>
+              </div>
+            `).join("")}
+          </div>
+        </details>
+      `;
+    }
+
+    html += `
       <div class="progress-wrap">
         <div class="progress-top">
           <span class="count">${checkedCount} / ${total}</span>
