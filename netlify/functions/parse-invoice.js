@@ -81,6 +81,19 @@ exports.handler = async (event) => {
           schema: {
             type: "object",
             properties: {
+              deliveryInfo: {
+                type: "array",
+                description: "Header/summary fields from the top of the FIRST page only (run ID, store number, store name, address, delivery date, cage count, crate counts, box counts, seal number, etc). Empty array if this batch of photos doesn't include that header section.",
+                items: {
+                  type: "object",
+                  properties: {
+                    label: { type: "string", description: "Field label as printed, e.g. 'Cage Count', 'Store Name'" },
+                    value: { type: "string", description: "The value for that field" },
+                  },
+                  required: ["label", "value"],
+                  additionalProperties: false,
+                },
+              },
               items: {
                 type: "array",
                 items: {
@@ -108,7 +121,7 @@ exports.handler = async (event) => {
                 },
               },
             },
-            required: ["items"],
+            required: ["deliveryInfo", "items"],
             additionalProperties: false,
           },
         },
@@ -120,7 +133,11 @@ exports.handler = async (event) => {
             ...imageBlocks,
             {
               type: "text",
-              text: `These are one or more photos of the same delivery invoice/packing slip for a convenience store (may span multiple photos of one long list). Extract every line item into a flat list: product name, expected quantity, unit if shown, and a category from the allowed set.
+              text: `These are one or more photos of the same delivery invoice/packing slip for a convenience store (may span multiple photos of one long list).
+
+First, check if any of these photos is the FIRST page of the invoice — it usually has a header/summary table above the line items (things like Run ID, Drop, Sequence, Store Number, Store Name, Address, Delivery Date, Cage Count, Milk Crates Count, Black Crates Count, Krispy Kreme/Daniels Donuts Box Count, Banana Box Count, Seal Number — exact fields vary by supplier). If present, extract every field from that header as a label/value pair in "deliveryInfo", in the order they appear. If none of these photos show that header section, return an empty array for "deliveryInfo" — don't guess or invent fields.
+
+Then extract every product line item into a flat list: product name, expected quantity, unit if shown, and a category from the allowed set.
 
 Rules:
 - Merge lines that are clearly the same product split across photos — don't duplicate.
@@ -146,7 +163,10 @@ Rules:
     return {
       statusCode: 200,
       headers: RESPONSE_HEADERS,
-      body: JSON.stringify({ items: parsed.items || [] }),
+      body: JSON.stringify({
+        items: parsed.items || [],
+        deliveryInfo: parsed.deliveryInfo || [],
+      }),
     };
   } catch (err) {
     console.error("parse-invoice error:", err);
