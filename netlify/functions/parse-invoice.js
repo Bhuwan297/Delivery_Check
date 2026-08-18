@@ -72,10 +72,10 @@ exports.handler = async (event) => {
   try {
     const response = await client.messages.create({
       model: "claude-opus-5",
-      max_tokens: 4096,
-      thinking: { type: "disabled" },
+      max_tokens: 8000,
+      thinking: { type: "adaptive" },
       output_config: {
-        effort: "medium",
+        effort: "high",
         format: {
           type: "json_schema",
           schema: {
@@ -139,11 +139,14 @@ First, check if any of these photos is the FIRST page of the invoice — it usua
 
 Then extract every product line item into a flat list: product name, expected quantity, unit if shown, and a category from the allowed set.
 
+These invoices are dense tables — some pages have 20+ rows packed tightly together, sometimes with small or faint print, and category labels are sometimes only shown once for a whole group of rows rather than repeated on every row. Before answering, work through the table systematically from top to bottom, row by row, and count how many rows you found — it's easy to accidentally stop partway through a long table or skip a row that shares a category label with the one above it. Every single row in the table is a separate line item that must appear in your output, even ones near the bottom of the page or in a densely packed section.
+
 Rules:
 - Merge lines that are clearly the same product split across photos — don't duplicate.
 - If a quantity isn't legible, use your best reading rather than guessing 1.
 - Keep product names short and recognizable (as you'd see them on a shelf), not the full distributor SKU description.
-- Pick the closest category even if it's a rough fit; use "Other" only when nothing fits.`,
+- Pick the closest category even if it's a rough fit; use "Other" only when nothing fits.
+- Do not omit a row because you're unsure about part of it — include it with your best-effort reading rather than dropping it.`,
             },
           ],
         },
