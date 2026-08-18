@@ -182,6 +182,7 @@
   const STORAGE_KEY = "deliverycheck_current_v1";
   const MAX_DIM = 1400;
   const JPEG_QUALITY = 0.85;
+  const BATCH_SIZE = 2; // photos per request — keeps each function call well under Netlify's ~26s hard timeout
 
   const CATEGORY_COLORS = {
     "Drinks": "var(--drinks)",
@@ -258,15 +259,38 @@
     state.screen = "loading";
     render();
     try {
-      const images = state.photos.map((p) => p.dataUrl.split(",")[1]);
-      const res = await fetch("/.netlify/functions/parse-invoice", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ images }),
+      const allImages = state.photos.map((p) => p.dataUrl.split(",")[1]);
+      const batches = [];
+      for (let i = 0; i < allImages.length; i += BATCH_SIZE) {
+        batches.push(allImages.slice(i, i + BATCH_SIZE));
+      }
+
+      const results = await Promise.allSettled(
+        batches.map((images) =>
+          fetch("/.netlify/functions/parse-invoice", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ images }),
+          }).then(async (res) => {
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+            return data.items || [];
+          })
+        )
+      );
+
+      const items = [];
+      let failedBatches = 0;
+      results.forEach((r) => {
+        if (r.status === "fulfilled") items.push(...r.value);
+        else { failedBatches++; console.error(r.reason); }
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Scan failed");
-      state.items = (data.items || []).map((it) => ({
+
+      if (items.length === 0) {
+        throw new Error("Couldn't read any of the photos — try again with fewer at once");
+      }
+
+      state.items = items.map((it) => ({
         id: crypto.randomUUID(),
         name: it.name,
         quantity: it.quantity,
@@ -277,6 +301,9 @@
       state.screen = "checklist";
       persist();
       render();
+      if (failedBatches) {
+        showToast(`Got ${items.length} items — ${failedBatches} photo${failedBatches === 1 ? "" : "s"} timed out, may need a rescan`);
+      }
     } catch (err) {
       console.error(err);
       state.screen = "scan";
