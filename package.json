@@ -1,0 +1,9 @@
+{
+  "name": "delivery-check",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Photo-to-checklist delivery counter for overnight 7-Eleven shifts",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0"
+  }
+}
