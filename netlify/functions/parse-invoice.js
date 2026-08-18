@@ -75,7 +75,7 @@ exports.handler = async (event) => {
       max_tokens: 8000,
       thinking: { type: "adaptive" },
       output_config: {
-        effort: "high",
+        effort: "medium",
         format: {
           type: "json_schema",
           schema: {
